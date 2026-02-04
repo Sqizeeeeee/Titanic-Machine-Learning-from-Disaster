@@ -24,4 +24,5 @@
 | Модель                    | Score Manual | Score SKLR | Epoch Readme                   |
 |---------------------------|--------------|------------|--------------------------------|
 |Logic regression           |0.76076       | 0.76315    | [description](README_epoch1.md)|
+|Logic regression           |no test       | 0.76315    | [description](README_epoch2.md)
 
