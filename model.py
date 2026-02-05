@@ -17,10 +17,13 @@ class MyModel:
         self.w = None
         self.b = None
 
-    def sigmoid(self, z: np.ndarray) -> np.ndarray:
+    def sigmoid(self, z: np.ndarray | float) -> np.ndarray:
+        z = np.array(z, dtype=np.float64)
         return 1 / (1 + np.exp(-z))
     
     def fit(self, X: np.ndarray, y: np.ndarray) -> None:
+
+        X = np.atleast_2d(X)
 
         n_samples, n_features = X.shape
         self.w = np.zeros(n_features)
@@ -55,6 +58,7 @@ class SKLRWrapper:
     """
     def __init__(self, C: float = 1.0, max_iter: int = 5000):
         # L2 регуляризация через l1_ratio=0
+        self.C = C
         self.model = LogisticRegression(
             l1_ratio=0,   # L2 регуляризация
             C=C,          # сила регуляризации
