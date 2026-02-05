@@ -1,140 +1,84 @@
 import pandas as pd
-import numpy as np
 from pathlib import Path
-from sklearn.neighbors import KNeighborsRegressor
-from sklearn.preprocessing import StandardScaler
+from sklearn.impute import KNNImputer
 
+def process_titanic_epoch4(train_path: str, test_path: str, processed_dir: str) -> None:
+    """
+    Epoch 4: базовые признаки + два варианта Age (median и KNN)
+    Сохраняем train и test для двух баз
+    """
 
-def knn_impute_age(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-
-
-    title_map = {
-        "Mr": 0,
-        "Miss": 1,
-        "Mrs": 2,
-        "Master": 3
-    }
-    df["Title_ord"] = df["Title"].map(title_map).fillna(4)
-
-    knn_features = [
-        "Sex",
-        "Pclass",
-        "SibSp",
-        "Parch",
-        "Title_ord"
-    ]
-
-    if "Fare" in df.columns:
-        df["Fare"] = df["Fare"].fillna(df["Fare"].median())
-        knn_features.append("Fare")
-
-
-    known_age = df[df["Age"].notna()]
-    unknown_age = df[df["Age"].isna()]
-
-    scaler = StandardScaler()
-    X_known = scaler.fit_transform(known_age[knn_features])
-    y_known = known_age["Age"]
-
-    X_unknown = scaler.transform(unknown_age[knn_features])
-
-    knn = KNeighborsRegressor(n_neighbors=5, weights="distance")
-    knn.fit(X_known, y_known)
-
-    df.loc[df["Age"].isna(), "Age"] = knn.predict(X_unknown)
-
-    df.drop(columns=["Title_ord"], inplace=True)
-    return df
-
-
-def process_titanic_epoch3_1(
-    train_path: str,
-    test_path: str,
-    processed_dir: str
-) -> None:
-
-    processed_dir = Path(processed_dir)
-    processed_dir.mkdir(parents=True, exist_ok=True)
+    processed_dir_path = Path(processed_dir)
+    processed_dir_path.mkdir(parents=True, exist_ok=True)
 
     train_df = pd.read_csv(train_path)
     test_df = pd.read_csv(test_path)
 
-    train_len = len(train_df)
+    for df_name, df in zip(["train", "test"], [train_df, test_df]):
 
-    # ======================
-    # 1. Объединяем
-    # ======================
-    df = pd.concat([train_df, test_df], ignore_index=True)
+        # -----------------------
+        # 1. Пол
+        # -----------------------
+        df["Sex"] = df["Sex"].map({"male": 0, "female": 1})
 
-    # ======================
-    # 2. Sex
-    # ======================
-    df["Sex"] = df["Sex"].map({"male": 0, "female": 1})
+        # -----------------------
+        # 2. FamilySize и IsAlone
+        # -----------------------
+        df["FamilySize"] = df["SibSp"] + df["Parch"] + 1
+        df["IsAlone"] = (df["FamilySize"] == 1).astype(int)
 
-    # ======================
-    # 3. Title
-    # ======================
-    df["Title"] = df["Name"].str.extract(r",\s*([^\.]+)\.")
-    common_titles = ["Mr", "Miss", "Mrs", "Master"]
-    df["Title"] = df["Title"].where(df["Title"].isin(common_titles), "Rare")
+        # -----------------------
+        # 3. Title
+        # -----------------------
+        common_titles = ["Mr", "Miss", "Mrs", "Master"]
+        df["Title"] = df["Name"].str.extract(r",\s*([^\.]+)\.")
+        df["Title"] = df["Title"].where(df["Title"].isin(common_titles), "Rare")
+        title_dummies = pd.get_dummies(df["Title"], prefix="Title")
+        df = pd.concat([df, title_dummies], axis=1)
 
-    # ======================
-    # 4. KNN → Age
-    # ======================
-    df = knn_impute_age(df)
+        # -----------------------
+        # 4. Embarked
+        # -----------------------
+        df["Embarked"] = df["Embarked"].fillna(df["Embarked"].mode()[0])
+        embarked_dummies = pd.get_dummies(df["Embarked"], prefix="Embarked")
+        df = pd.concat([df, embarked_dummies], axis=1)
 
-    # ======================
-    # 5. Family / IsAlone
-    # ======================
-    df["FamilySize"] = df["SibSp"] + df["Parch"] + 1
-    df["IsAlone"] = (df["FamilySize"] == 1).astype(int)
+        # -----------------------
+        # 5. Удаляем ненужные колонки
+        # -----------------------
+        drop_cols = ["Name", "Title", "Ticket", "Cabin", "SibSp", "Parch", "Fare", "Pclass"]
+        df.drop(columns=[c for c in drop_cols if c in df.columns], inplace=True)
 
-    # ======================
-    # 6. Embarked
-    # ======================
-    df["Embarked"] = df["Embarked"].fillna(df["Embarked"].mode()[0])
+        # -----------------------
+        # 6. Age - два варианта
+        # -----------------------
+        # 6a. Median
+        df_median = df.copy()
+        df_median["Age"] = df_median["Age"].fillna(df_median["Age"].median())
 
-    # ======================
-    # 7. One-hot
-    # ======================
-    title_dummies = pd.get_dummies(df["Title"], prefix="Title", dtype=int)
-    embarked_dummies = pd.get_dummies(df["Embarked"], prefix="Embarked", dtype=int)
+        # 6b. KNN
+        df_knn = df.copy()
+        knn_features = ["Sex", "FamilySize", "IsAlone"]  # можно добавить Title_*, Embarked_* для KNN
+        for col in df.columns:
+            if col.startswith("Title_") or col.startswith("Embarked_"):
+                knn_features.append(col)
+        knn_features.append("Age")
 
-    df = pd.concat([df, title_dummies, embarked_dummies], axis=1)
+        knn_imputer = KNNImputer(n_neighbors=7)
+        knn_arr = knn_imputer.fit_transform(df_knn[knn_features])
+        df_knn["Age"] = knn_arr[:, knn_features.index("Age")]
 
-    # ======================
-    # 8. Drop columns
-    # ======================
-    drop_cols = [
-        "PassengerId",
-        "Name",
-        "Title",
-        "Embarked",
-        "Ticket",
-        "Cabin",
-        "Fare",
-        "Pclass",
-        "SibSp",
-        "Parch",
-        "FamilySize"
-    ]
+        # -----------------------
+        # 7. Сохраняем
+        # -----------------------
+        df_median.to_csv(processed_dir_path / f"epoch4_{df_name}_median.csv", index=False)
+        df_knn.to_csv(processed_dir_path / f"epoch4_{df_name}_knn.csv", index=False)
 
-    df.drop(columns=[c for c in drop_cols if c in df.columns], inplace=True)
+    print("Epoch 4 processed data saved (median and KNN Age)")
 
-    # ======================
-    # 9. Split back
-    # ======================
-    train_processed = df.iloc[:train_len].copy()
-    test_processed = df.iloc[train_len:].copy()
-
-    train_processed.to_csv(processed_dir / "epoch3_1_train.csv", index=False)
-    test_processed.to_csv(processed_dir / "epoch3_1_test.csv", index=False)
-
-    print("Epoch 3.1 processed data saved")
-    print(train_processed.head())
-    print(train_processed.dtypes)
-
-
-if __name__ == '__main__':
-    process_titanic_epoch3_1('data/raw/train.csv', 'data/raw/test.csv', 'data/processed/')
+if __name__ == "__main__":
+    process_titanic_epoch4(
+        train_path="data/raw/train.csv",
+        test_path="data/raw/test.csv",
+        processed_dir="data/processed"
+    )

@@ -1,63 +1,82 @@
-import numpy as np
 import pandas as pd
+import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
+
 from model import MyModel, SKLRWrapper
-from utils import load_processed_train, load_processed_test, save_submission, count_disagreements
+from features import add_features_epoch4
+
+def prepare_epoch4_submission(train_csv: str, test_csv: str, submission_path: str, desc: str):
+    
+    # 1. Загружаем данные
+    train_df = pd.read_csv(train_csv)
+    test_df = pd.read_csv(test_csv)
+
+    y_train = train_df["Survived"].to_numpy()
+    X_train = train_df.drop(columns=["Survived", "PassengerId"])
+    X_test = test_df.drop(columns=["PassengerId"], errors="ignore")
+
+    
+    # 2. Добавляем все признаки
+    X_train = add_features_epoch4(X_train)
+    X_test = add_features_epoch4(X_test)
+
+    
+    # 3. One-hot encoding для категориальных (Embarked, Title и др.)
+    X_train = pd.get_dummies(X_train)
+    X_test = pd.get_dummies(X_test)
+
+    # Согласуем колонки
+    X_test = X_test.reindex(columns=X_train.columns, fill_value=0)
+
+    
+    # 4. Нормализация
+    
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    
+    # 5. Обучаем Manual модель
+    manual_model = MyModel(lr=0.01, epochs=3000, l2_lambda=0.01)
+    manual_model.fit(X_train_scaled, y_train)
+    manual_preds = manual_model.predict(X_test_scaled)
+
+    
+    # 6. Обучаем SKLearn модель
+    skl_model = SKLRWrapper(C=1.0, max_iter=5000)
+    skl_model.fit(X_train_scaled, y_train)
+    skl_preds = skl_model.predict(X_test_scaled)
+
+    
+    # 7. Сохраняем submission
+    sub_manual = pd.DataFrame({
+        "PassengerId": test_df["PassengerId"],
+        "Survived": manual_preds
+    })
+    sub_skl = pd.DataFrame({
+        "PassengerId": test_df["PassengerId"],
+        "Survived": skl_preds
+    })
+
+    sub_manual.to_csv(f"submissions/epoch4_submission_manual_{desc}.csv", index=False)
+    sub_skl.to_csv(f"submissions/epoch4_submission_skl_{desc}.csv", index=False)
+
+    print(f"Epoch 4 submissions ({desc}) saved!")
 
 
+if __name__ == "__main__":
+    # Median age
+    prepare_epoch4_submission(
+        "data/processed/epoch4_train_median.csv",
+        "data/processed/epoch4_test_median.csv",
+        "submissions/epoch4_submission_median.csv",
+        desc="median"
+    )
 
-
-# 1. Load processed data
-df = pd.read_csv("data/processed/epoch3_1_train.csv")
-
-y = df["Survived"].to_numpy()
-X = df.drop(columns=["Survived"]).to_numpy()
-
-X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
-
-
-# 2. Scale
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_val_scaled = scaler.transform(X_val)
-
-
-# 3. Manual Logistic Regression Grid
-l2_lambdas = [0, 1e-4, 1e-3, 1e-2, 1e-1, 1, 10]
-learning_rates = [0.001, 0.005, 0.01, 0.05, 0.1]
-epochs_list = [200, 500, 1000, 3000]
-
-best_manual_acc = -1
-best_manual_model = None
-print("\n=== Manual Logistic Regression Grid Search ===")
-for lr in learning_rates:
-    for l2 in l2_lambdas:
-        for ep in epochs_list:
-            model = MyModel(lr=lr, epochs=ep, l2_lambda=l2)
-            try:
-                model.fit(X_train_scaled, y_train)
-                preds = model.predict(X_val_scaled)
-                acc = np.mean(preds == y_val)
-                print(f"lr={lr:.3f}, L2={l2}, epochs={ep}, val_acc={acc:.4f}")
-                if acc > best_manual_acc:
-                    best_manual_acc = acc
-                    best_manual_model = model
-            except Exception as e:
-                print(f"lr={lr:.3f}, L2={l2}, epochs={ep} -> ERROR: {e}")
-
-print(f"\nBest Manual Model: val_acc={best_manual_acc:.4f}")
-
-
-# 4. SKLearn Logistic Regression
-model_skl = SKLRWrapper(C=0.1, max_iter=5000)
-model_skl.fit(X_train_scaled, y_train)
-preds_skl = model_skl.predict(X_val_scaled)
-acc_skl = np.mean(preds_skl == y_val)
-print(f"\nSKLearn Model: C=0.1, Validation accuracy={acc_skl:.4f}")
-
-
-# 5. Compare best models
-best_manual_preds = best_manual_model.predict(X_val_scaled)
-diff = np.sum(best_manual_preds != preds_skl)
-print(f"\nNumber of different predictions between best manual model and SKLearn: {diff}")
+    # KNN age
+    prepare_epoch4_submission(
+        "data/processed/epoch4_train_knn.csv",
+        "data/processed/epoch4_test_knn.csv",
+        "submissions/epoch4_submission_knn.csv",
+        desc="knn"
+    )
