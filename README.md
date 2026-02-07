@@ -1,4 +1,4 @@
-# Titanic Kaggle — EDA
+# Titanic Kaggle - EDA
 
 ## Что мы сделали на этапе анализа данных
 - Просмотрели все колонки датасета train.csv и test.csv
