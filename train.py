@@ -1,82 +1,76 @@
-import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler
+import pandas as pd
+import json
+import os
 
-from model import MyModel, SKLRWrapper
-from features import add_features_epoch4
+from model import RandomForestClassifier
+from utils import load_epoch_data, train_val_split, accuracy_score
 
-def prepare_epoch4_submission(train_csv: str, test_csv: str, submission_path: str, desc: str):
-    
-    # 1. Загружаем данные
-    train_df = pd.read_csv(train_csv)
-    test_df = pd.read_csv(test_csv)
+def main():
 
-    y_train = train_df["Survived"].to_numpy()
-    X_train = train_df.drop(columns=["Survived", "PassengerId"])
-    X_test = test_df.drop(columns=["PassengerId"], errors="ignore")
+    X, y = load_epoch_data("data/processed/epoch5_train.csv")
+    X_train, X_val, y_train, y_val = train_val_split(
+        X, y, test_size=0.2, random_state=42, stratify=True
+    )
 
-    
-    # 2. Добавляем все признаки
-    X_train = add_features_epoch4(X_train)
-    X_test = add_features_epoch4(X_test)
+    param_grid = {
+        "n_estimators": [25, 50, 100],
+        "max_depth": [4, 6, 8],
+        "min_samples_leaf": [1, 3, 5],
+        "max_features": [None, int(np.sqrt(X.shape[1]))]
+    }
 
-    
-    # 3. One-hot encoding для категориальных (Embarked, Title и др.)
-    X_train = pd.get_dummies(X_train)
-    X_test = pd.get_dummies(X_test)
+    best_acc = 0
+    best_params = None
 
-    # Согласуем колонки
-    X_test = X_test.reindex(columns=X_train.columns, fill_value=0)
+    for n in param_grid["n_estimators"]:
+        for d in param_grid["max_depth"]:
+            for leaf in param_grid["min_samples_leaf"]:
+                for mf in param_grid["max_features"]:
+                    rf = RandomForestClassifier(
+                        n_estimators=n,
+                        max_depth=d,
+                        min_samples_leaf=leaf,
+                        max_features=mf,
+                        random_state=42,
+                    )
+                    rf.fit(X_train, y_train)
+                    preds = rf.predict(X_val)
+                    acc = accuracy_score(y_val, preds)
+                    if acc > best_acc:
+                        best_acc = acc
+                        best_params = {"n_estimators": n, "max_depth": d,
+                                       "min_samples_leaf": leaf, "max_features": mf}
 
-    
-    # 4. Нормализация
-    
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
+    print("Best params:", best_params)
+    print("Best val accuracy:", best_acc)
 
-    
-    # 5. Обучаем Manual модель
-    manual_model = MyModel(lr=0.01, epochs=3000, l2_lambda=0.01)
-    manual_model.fit(X_train_scaled, y_train)
-    manual_preds = manual_model.predict(X_test_scaled)
+    os.makedirs("submissions", exist_ok=True)
+    with open("submissions/best_params.json", "w") as f:
+        json.dump(best_params, f)
 
-    
-    # 6. Обучаем SKLearn модель
-    skl_model = SKLRWrapper(C=1.0, max_iter=5000)
-    skl_model.fit(X_train_scaled, y_train)
-    skl_preds = skl_model.predict(X_test_scaled)
+    rf_final = RandomForestClassifier(
+        n_estimators=best_params["n_estimators"],
+        max_depth=best_params["max_depth"],
+        min_samples_leaf=best_params["min_samples_leaf"],
+        max_features=best_params["max_features"],
+        random_state=42,
+    )
+    rf_final.fit(X, y)
 
-    
-    # 7. Сохраняем submission
-    sub_manual = pd.DataFrame({
-        "PassengerId": test_df["PassengerId"],
-        "Survived": manual_preds
+
+    test_df = pd.read_csv("data/processed/epoch5_test.csv")
+    X_test = test_df.values
+    preds_test = rf_final.predict(X_test)
+
+    submission = pd.DataFrame({
+        "PassengerId": pd.read_csv("data/raw/test.csv")["PassengerId"],
+        "Survived": preds_test
     })
-    sub_skl = pd.DataFrame({
-        "PassengerId": test_df["PassengerId"],
-        "Survived": skl_preds
-    })
-
-    sub_manual.to_csv(f"submissions/epoch4_submission_manual_{desc}.csv", index=False)
-    sub_skl.to_csv(f"submissions/epoch4_submission_skl_{desc}.csv", index=False)
-
-    print(f"Epoch 4 submissions ({desc}) saved!")
+    submission_path = "submissions/epoch5_submission.csv"
+    submission.to_csv(submission_path, index=False)
+    print(f"Submission saved to {submission_path}")
 
 
 if __name__ == "__main__":
-    # Median age
-    prepare_epoch4_submission(
-        "data/processed/epoch4_train_median.csv",
-        "data/processed/epoch4_test_median.csv",
-        "submissions/epoch4_submission_median.csv",
-        desc="median"
-    )
-
-    # KNN age
-    prepare_epoch4_submission(
-        "data/processed/epoch4_train_knn.csv",
-        "data/processed/epoch4_test_knn.csv",
-        "submissions/epoch4_submission_knn.csv",
-        desc="knn"
-    )
+    main()

@@ -1,76 +1,87 @@
-import pandas as pd
 import numpy as np
-from pathlib import Path
+import pandas as pd
+from typing import Tuple, Optional
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score as skl_accuracy_score
+from sklearn.metrics import roc_auc_score, confusion_matrix
+import matplotlib.pyplot as plt
+import os
 
-def load_processed_train(path: str):
-    """
-    Загружает processed train csv и возвращает X_train, X_val, y_train, y_val
-    """
+
+
+def load_epoch_data(path: str) -> Tuple[np.ndarray, np.ndarray]:
+    
     df = pd.read_csv(path)
-    X = df.drop(columns="Survived")
-    y = df["Survived"]
+    X = df.iloc[:, :-1].values
+    y = df.iloc[:, -1].values
+    return X, y
 
-    X_train, X_val, y_train, y_val = train_test_split(
+
+
+def train_val_split(
+    X: np.ndarray,
+    y: np.ndarray,
+    test_size: float = 0.2,
+    random_state: Optional[int] = None,
+    stratify: bool = True,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    
+    stratify_y = y if stratify else None
+
+    return train_test_split(
         X,
         y,
-        test_size=0.2,
-        random_state=42,
-        stratify=y
+        test_size=test_size,
+        random_state=random_state,
+        stratify=stratify_y,
     )
 
-    return X_train, X_val, y_train, y_val
 
-def load_processed_test(path: str):
+
+def accuracy_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    return skl_accuracy_score(y_true, y_pred)
+
+
+def roc_auc(
+    y_true: np.ndarray,
+    y_proba: np.ndarray,
+) -> float:
     """
-    Загружает processed test csv и возвращает X и passenger_ids
+    y_proba: probabilities for class 1
     """
-    df = pd.read_csv(path)
-    if "PassengerId" in df.columns:
-        passenger_ids = df["PassengerId"].values
-        X = df.drop(columns="PassengerId")
-    else:
-        # Если колонка PassengerId отсутствует
-        passenger_ids = np.arange(len(df))
-        X = df.copy()
-
-    return X, passenger_ids
-
-def save_submission(passenger_ids: np.ndarray, predictions: np.ndarray, dir_path: str, filename: str) -> None:
-    import pandas as pd
-    from pathlib import Path
-
-    dir_path = Path(dir_path)
-    dir_path.mkdir(parents=True, exist_ok=True)
-
-    # Приводим к int
-    passenger_ids = passenger_ids.astype(int)
-
-    submission_df = pd.DataFrame({
-        "PassengerId": passenger_ids,
-        "Survived": predictions.astype(int)
-    })
-    submission_path = dir_path / filename
-    submission_df.to_csv(submission_path, index=False)
-    print(f"Saved submission: {submission_path}")
+    return roc_auc_score(y_true, y_proba)
 
 
-def count_disagreements(y_true: np.ndarray, y_pred: np.ndarray) -> int:
+
+def save_confusion_matrix(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    title: str,
+    filename: str,
+):
     """
-    Считает количество несовпадений предсказаний и истины
+    Saves confusion matrix plot to plots/
     """
-    return int(np.sum(y_true != y_pred))
+    cm = confusion_matrix(y_true, y_pred)
 
-def count_changes(y_old: np.ndarray, y_new: np.ndarray):
-    """
-    Считает сколько предсказаний поменялось:
-    - total: общее количество изменений
-    - zero_to_one: количество изменений с 0 на 1
-    - one_to_zero: количество изменений с 1 на 0
-    """
-    if len(y_old) != len(y_new):
-        raise ValueError("Arrays must have the same length")
-    total = np.sum(y_old != y_new)
-    zero_to_one = np.sum((y_old == 0) & (y_new == 1))
-    one_to_zero = np.sum((y_old == 1) & (y_new == 0))
-    return int(total), int(zero_to_one), int(one_to_zero)
+    os.makedirs("plots", exist_ok=True)
+
+    plt.figure(figsize=(4, 4))
+    plt.imshow(cm)
+    plt.title(title)
+    plt.colorbar()
+
+    ticks = np.arange(len(np.unique(y_true)))
+    plt.xticks(ticks, ticks)
+    plt.yticks(ticks, ticks)
+
+    plt.xlabel("Predicted")
+    plt.ylabel("True")
+
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            plt.text(j, i, cm[i, j], ha="center", va="center")
+
+    plt.tight_layout()
+    plt.savefig(os.path.join("plots", filename))
+    plt.close()

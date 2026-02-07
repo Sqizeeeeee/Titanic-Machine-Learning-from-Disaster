@@ -27,5 +27,5 @@
 |Logic regression  (2)      |no test       | 0.76315    | [description](about/README_epoch2.md)|
 |Logic regression  (3)      |0.77033       | 0.76794    | [description](about/README_epoch3.md)|
 |Logic regression  (3.1)    |0.77033       | no test    | [description](about/README_epoch3.1.md)|
-|Logic regression  (4)      |no test       | 0.77033   | [description](about/README_epoch4.md)|
-
+|Logic regression  (4)      |no test       | 0.77033    | [description](about/README_epoch4.md)|
+|Random Forest  (5)         |0.77990       | no test    | [description](about/README_epoch5.md)|

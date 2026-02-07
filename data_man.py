@@ -1,84 +1,121 @@
+import os
 import pandas as pd
-from pathlib import Path
+import numpy as np
+from typing import Tuple
 from sklearn.impute import KNNImputer
 
-def process_titanic_epoch4(train_path: str, test_path: str, processed_dir: str) -> None:
-    """
-    Epoch 4: базовые признаки + два варианта Age (median и KNN)
-    Сохраняем train и test для двух баз
-    """
+RAW_DIR = "data/raw"
+PROCESSED_DIR = "data/processed"
+TRAIN_OUT = os.path.join(PROCESSED_DIR, "epoch5_train.csv")
+TEST_OUT = os.path.join(PROCESSED_DIR, "epoch5_test.csv")
 
-    processed_dir_path = Path(processed_dir)
-    processed_dir_path.mkdir(parents=True, exist_ok=True)
 
-    train_df = pd.read_csv(train_path)
-    test_df = pd.read_csv(test_path)
 
-    for df_name, df in zip(["train", "test"], [train_df, test_df]):
+def extract_title(name: str) -> str:
+    title = name.split(',')[1].split('.')[0].strip()
+    if title in {"Mr", "Miss", "Mrs", "Master"}:
+        return title
+    return "Rare"
 
-        # -----------------------
-        # 1. Пол
-        # -----------------------
-        df["Sex"] = df["Sex"].map({"male": 0, "female": 1})
 
-        # -----------------------
-        # 2. FamilySize и IsAlone
-        # -----------------------
-        df["FamilySize"] = df["SibSp"] + df["Parch"] + 1
-        df["IsAlone"] = (df["FamilySize"] == 1).astype(int)
+def encode_title(series: pd.Series) -> pd.Series:
+    mapping = {
+        "Mr": 0,
+        "Miss": 1,
+        "Mrs": 2,
+        "Master": 3,
+        "Rare": 4,
+    }
+    return series.map(mapping).astype(int)
 
-        # -----------------------
-        # 3. Title
-        # -----------------------
-        common_titles = ["Mr", "Miss", "Mrs", "Master"]
-        df["Title"] = df["Name"].str.extract(r",\s*([^\.]+)\.")
-        df["Title"] = df["Title"].where(df["Title"].isin(common_titles), "Rare")
-        title_dummies = pd.get_dummies(df["Title"], prefix="Title")
-        df = pd.concat([df, title_dummies], axis=1)
 
-        # -----------------------
-        # 4. Embarked
-        # -----------------------
-        df["Embarked"] = df["Embarked"].fillna(df["Embarked"].mode()[0])
-        embarked_dummies = pd.get_dummies(df["Embarked"], prefix="Embarked")
-        df = pd.concat([df, embarked_dummies], axis=1)
+def encode_embarked(series: pd.Series) -> pd.Series:
+    mapping = {"S": 0, "C": 1, "Q": 2}
+    return series.map(mapping).astype(int)
 
-        # -----------------------
-        # 5. Удаляем ненужные колонки
-        # -----------------------
-        drop_cols = ["Name", "Title", "Ticket", "Cabin", "SibSp", "Parch", "Fare", "Pclass"]
-        df.drop(columns=[c for c in drop_cols if c in df.columns], inplace=True)
 
-        # -----------------------
-        # 6. Age - два варианта
-        # -----------------------
-        # 6a. Median
-        df_median = df.copy()
-        df_median["Age"] = df_median["Age"].fillna(df_median["Age"].median())
 
-        # 6b. KNN
-        df_knn = df.copy()
-        knn_features = ["Sex", "FamilySize", "IsAlone"]  # можно добавить Title_*, Embarked_* для KNN
-        for col in df.columns:
-            if col.startswith("Title_") or col.startswith("Embarked_"):
-                knn_features.append(col)
-        knn_features.append("Age")
+def load_raw() -> Tuple[pd.DataFrame, pd.DataFrame]:
+    train = pd.read_csv(os.path.join(RAW_DIR, "train.csv"))
+    test = pd.read_csv(os.path.join(RAW_DIR, "test.csv"))
+    return train, test
 
-        knn_imputer = KNNImputer(n_neighbors=7)
-        knn_arr = knn_imputer.fit_transform(df_knn[knn_features])
-        df_knn["Age"] = knn_arr[:, knn_features.index("Age")]
 
-        # -----------------------
-        # 7. Сохраняем
-        # -----------------------
-        df_median.to_csv(processed_dir_path / f"epoch4_{df_name}_median.csv", index=False)
-        df_knn.to_csv(processed_dir_path / f"epoch4_{df_name}_knn.csv", index=False)
+def build_features(train: pd.DataFrame, test: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    # concatenate for consistent processing
+    full = pd.concat([train.drop(columns=["Survived"]), test], axis=0, ignore_index=True)
 
-    print("Epoch 4 processed data saved (median and KNN Age)")
+    # Sex
+    full["Sex"] = full["Sex"].map({"male": 0, "female": 1}).astype(int)
+
+    # Title
+    full["Title"] = full["Name"].apply(extract_title)
+    full["Title"] = encode_title(full["Title"])
+
+    # Family features
+    full["FamilySize"] = full["SibSp"] + full["Parch"] + 1
+    full["IsAlone"] = (full["FamilySize"] == 1).astype(int)
+
+    # Embarked
+    embarked_mode = train["Embarked"].mode()[0]
+    full["Embarked"] = full["Embarked"].fillna(embarked_mode)
+    full["Embarked"] = encode_embarked(full["Embarked"])
+
+    # Fare
+    fare_median = train["Fare"].median()
+    full["Fare"] = full["Fare"].fillna(fare_median)
+    full["Fare_log"] = np.log(full["Fare"] + 1)
+
+    # Age — KNN imputation
+    age_features = ["Pclass", "Sex", "SibSp", "Parch", "Fare_log"]
+
+    train_idx = np.arange(len(train))
+    test_idx = np.arange(len(train), len(full))
+
+    imputer = KNNImputer(n_neighbors=5)
+    imputer.fit(full.loc[train_idx, age_features + ["Age"]])
+
+    age_imputed = imputer.transform(full[age_features + ["Age"]])
+    full["Age"] = age_imputed[:, -1]
+
+    # Select final features
+    features = [
+        "Sex",
+        "Title",
+        "Pclass",
+        "Age",
+        "Fare_log",
+        "FamilySize",
+        "IsAlone",
+        "Embarked",
+    ]
+
+    full = full[features]
+
+    X_train = full.iloc[:len(train)].copy()
+    X_test = full.iloc[len(train):].copy()
+
+    return X_train, X_test
+
+
+def main():
+    os.makedirs(PROCESSED_DIR, exist_ok=True)
+
+    train_raw, test_raw = load_raw()
+    X_train, X_test = build_features(train_raw, test_raw)
+
+    y_train = train_raw["Survived"].astype(int)
+
+    train_out = X_train.copy()
+    train_out["Survived"] = y_train.values
+
+    train_out.to_csv(TRAIN_OUT, index=False)
+    X_test.to_csv(TEST_OUT, index=False)
+
+    print("[datapipe] Saved:")
+    print(f" - {TRAIN_OUT}")
+    print(f" - {TEST_OUT}")
+
 
 if __name__ == "__main__":
-    process_titanic_epoch4(
-        train_path="data/raw/train.csv",
-        test_path="data/raw/test.csv",
-        processed_dir="data/processed"
-    )
+    main()
