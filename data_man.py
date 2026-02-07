@@ -1,121 +1,76 @@
-import os
 import pandas as pd
 import numpy as np
-from typing import Tuple
 from sklearn.impute import KNNImputer
 
-RAW_DIR = "data/raw"
-PROCESSED_DIR = "data/processed"
-TRAIN_OUT = os.path.join(PROCESSED_DIR, "epoch5_train.csv")
-TEST_OUT = os.path.join(PROCESSED_DIR, "epoch5_test.csv")
+def fill_age_knn(df):
+    # Для KNN берем числовые признаки + категориальные кодируем int временно
+    tmp_df = df.copy()
+    cat_cols = ['Sex', 'Title', 'Pclass']
+    for col in cat_cols:
+        tmp_df[col] = tmp_df[col].astype('category').cat.codes
 
-
-
-def extract_title(name: str) -> str:
-    title = name.split(',')[1].split('.')[0].strip()
-    if title in {"Mr", "Miss", "Mrs", "Master"}:
-        return title
-    return "Rare"
-
-
-def encode_title(series: pd.Series) -> pd.Series:
-    mapping = {
-        "Mr": 0,
-        "Miss": 1,
-        "Mrs": 2,
-        "Master": 3,
-        "Rare": 4,
-    }
-    return series.map(mapping).astype(int)
-
-
-def encode_embarked(series: pd.Series) -> pd.Series:
-    mapping = {"S": 0, "C": 1, "Q": 2}
-    return series.map(mapping).astype(int)
-
-
-
-def load_raw() -> Tuple[pd.DataFrame, pd.DataFrame]:
-    train = pd.read_csv(os.path.join(RAW_DIR, "train.csv"))
-    test = pd.read_csv(os.path.join(RAW_DIR, "test.csv"))
-    return train, test
-
-
-def build_features(train: pd.DataFrame, test: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    # concatenate for consistent processing
-    full = pd.concat([train.drop(columns=["Survived"]), test], axis=0, ignore_index=True)
-
-    # Sex
-    full["Sex"] = full["Sex"].map({"male": 0, "female": 1}).astype(int)
-
-    # Title
-    full["Title"] = full["Name"].apply(extract_title)
-    full["Title"] = encode_title(full["Title"])
-
-    # Family features
-    full["FamilySize"] = full["SibSp"] + full["Parch"] + 1
-    full["IsAlone"] = (full["FamilySize"] == 1).astype(int)
-
-    # Embarked
-    embarked_mode = train["Embarked"].mode()[0]
-    full["Embarked"] = full["Embarked"].fillna(embarked_mode)
-    full["Embarked"] = encode_embarked(full["Embarked"])
-
-    # Fare
-    fare_median = train["Fare"].median()
-    full["Fare"] = full["Fare"].fillna(fare_median)
-    full["Fare_log"] = np.log(full["Fare"] + 1)
-
-    # Age — KNN imputation
-    age_features = ["Pclass", "Sex", "SibSp", "Parch", "Fare_log"]
-
-    train_idx = np.arange(len(train))
-    test_idx = np.arange(len(train), len(full))
-
+    knn_cols = ['Age', 'Pclass', 'Sex', 'SibSp', 'Parch', 'Fare']
     imputer = KNNImputer(n_neighbors=5)
-    imputer.fit(full.loc[train_idx, age_features + ["Age"]])
+    tmp_df[knn_cols] = imputer.fit_transform(tmp_df[knn_cols])
+    
+    df['Age'] = tmp_df['Age']
+    return df
 
-    age_imputed = imputer.transform(full[age_features + ["Age"]])
-    full["Age"] = age_imputed[:, -1]
+def extract_title(name):
+    return name.split(',')[1].split('.')[0].strip()
 
-    # Select final features
-    features = [
-        "Sex",
-        "Title",
-        "Pclass",
-        "Age",
-        "Fare_log",
-        "FamilySize",
-        "IsAlone",
-        "Embarked",
-    ]
+def create_age_group(age):
+    if age <= 12:
+        return 'Child'
+    elif age <= 18:
+        return 'Teen'
+    elif age <= 30:
+        return 'YoungAdult'
+    elif age <= 50:
+        return 'Adult'
+    else:
+        return 'Senior'
 
-    full = full[features]
-
-    X_train = full.iloc[:len(train)].copy()
-    X_test = full.iloc[len(train):].copy()
-
-    return X_train, X_test
-
-
-def main():
-    os.makedirs(PROCESSED_DIR, exist_ok=True)
-
-    train_raw, test_raw = load_raw()
-    X_train, X_test = build_features(train_raw, test_raw)
-
-    y_train = train_raw["Survived"].astype(int)
-
-    train_out = X_train.copy()
-    train_out["Survived"] = y_train.values
-
-    train_out.to_csv(TRAIN_OUT, index=False)
-    X_test.to_csv(TEST_OUT, index=False)
-
-    print("[datapipe] Saved:")
-    print(f" - {TRAIN_OUT}")
-    print(f" - {TEST_OUT}")
-
+def process_data_catboost(train_path, test_path, save_path_train, save_path_test):
+    train_df = pd.read_csv(train_path)
+    test_df = pd.read_csv(test_path)
+    
+    for df in [train_df, test_df]:
+        # Title
+        df['Title'] = df['Name'].apply(extract_title)
+        
+        # Family features
+        df['FamilySize'] = df['SibSp'] + df['Parch'] + 1
+        df['IsAlone'] = (df['FamilySize'] == 1).astype(str)
+        
+        # Age_group
+        df = fill_age_knn(df)
+        df['Age_group'] = df['Age'].apply(lambda x: create_age_group(x) if not pd.isnull(x) else np.nan)
+        # Fare_bin
+        df['Fare_bin'] = pd.qcut(df['Fare'].fillna(df['Fare'].median()), 4, labels=False).astype(str)
+        
+        # Interaction features
+        df['Title_Pclass'] = df['Title'] + '_' + df['Pclass'].astype(str)
+        df['Sex_Pclass'] = df['Sex'] + '_' + df['Pclass'].astype(str)
+        df['IsAlone_AgeGroup'] = df['IsAlone'] + '_' + df['Age_group'].fillna('Unknown')
+        
+        # Fill missing Age with median for simplicity (CatBoost can handle missing too)
+        df['Age'] = df['Age'].fillna(df['Age'].median())
+        df['Embarked'] = df['Embarked'].fillna(df['Embarked'].mode()[0])
+    
+    # Columns to keep
+    features = ['Pclass','Sex','Age','Fare','Embarked','Title','FamilySize','IsAlone',
+                'Age_group','Fare_bin','Title_Pclass','Sex_Pclass','IsAlone_AgeGroup']
+    
+    train_df[features + ['Survived']].to_csv(save_path_train, index=False)
+    test_df[features].to_csv(save_path_test, index=False)
+    
+    print(f"Processed data saved to {save_path_train} and {save_path_test}")
 
 if __name__ == "__main__":
-    main()
+    process_data_catboost(
+        train_path='data/raw/train.csv',
+        test_path='data/raw/test.csv',
+        save_path_train='data/processed/epoch6_train.csv',
+        save_path_test='data/processed/epoch6_test.csv'
+    )

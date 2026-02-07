@@ -5,3 +5,4 @@ __pycache__/*
 TODO
 .DS_Store
 Makefile
+catboost_info/*

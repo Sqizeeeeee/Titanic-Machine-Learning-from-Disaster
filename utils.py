@@ -1,87 +1,42 @@
-import numpy as np
 import pandas as pd
-from typing import Tuple, Optional
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score as skl_accuracy_score
-from sklearn.metrics import roc_auc_score, confusion_matrix
-import matplotlib.pyplot as plt
-import os
+import numpy as np
+from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.metrics import accuracy_score
 
+def load_epoch_data(path):
 
-
-def load_epoch_data(path: str) -> Tuple[np.ndarray, np.ndarray]:
-    
     df = pd.read_csv(path)
-    X = df.iloc[:, :-1].values
-    y = df.iloc[:, -1].values
-    return X, y
+    if 'Survived' in df.columns:
+        X = df.drop(columns=['Survived'])
+        y = df['Survived'].values
+        return X, y
+    else:
+        return df
 
+def get_cat_features(df):
 
+    cat_cols = df.select_dtypes(include=['object']).columns.tolist()
+    return cat_cols
 
-def train_val_split(
-    X: np.ndarray,
-    y: np.ndarray,
-    test_size: float = 0.2,
-    random_state: Optional[int] = None,
-    stratify: bool = True,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    
-    stratify_y = y if stratify else None
+def train_val_split(X, y, test_size=0.2, random_state=42, stratify=None):
 
-    return train_test_split(
-        X,
-        y,
-        test_size=test_size,
-        random_state=random_state,
-        stratify=stratify_y,
+    X_train, X_val, y_train, y_val = train_test_split(
+        X, y, test_size=test_size, random_state=random_state, stratify=stratify
     )
+    return X_train, X_val, y_train, y_val
 
+def cross_val_predict(model_class, X, y, folds=5, cat_features=None, **model_params):
 
+    skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=42)
+    val_preds = np.zeros(len(y))
 
-def accuracy_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    return skl_accuracy_score(y_true, y_pred)
+    for train_idx, val_idx in skf.split(X, y):
+        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+        y_train, y_val = y[train_idx], y[val_idx]
 
+        model = model_class(cat_features=cat_features, **model_params)
+        model.fit(X_train, y_train, eval_set=(X_val, y_val))
+        val_preds[val_idx] = model.predict(X_val)
 
-def roc_auc(
-    y_true: np.ndarray,
-    y_proba: np.ndarray,
-) -> float:
-    """
-    y_proba: probabilities for class 1
-    """
-    return roc_auc_score(y_true, y_proba)
-
-
-
-def save_confusion_matrix(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
-    title: str,
-    filename: str,
-):
-    """
-    Saves confusion matrix plot to plots/
-    """
-    cm = confusion_matrix(y_true, y_pred)
-
-    os.makedirs("plots", exist_ok=True)
-
-    plt.figure(figsize=(4, 4))
-    plt.imshow(cm)
-    plt.title(title)
-    plt.colorbar()
-
-    ticks = np.arange(len(np.unique(y_true)))
-    plt.xticks(ticks, ticks)
-    plt.yticks(ticks, ticks)
-
-    plt.xlabel("Predicted")
-    plt.ylabel("True")
-
-    for i in range(cm.shape[0]):
-        for j in range(cm.shape[1]):
-            plt.text(j, i, cm[i, j], ha="center", va="center")
-
-    plt.tight_layout()
-    plt.savefig(os.path.join("plots", filename))
-    plt.close()
+    acc = accuracy_score(y, val_preds)
+    return val_preds, acc
