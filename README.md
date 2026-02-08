@@ -30,3 +30,4 @@
 |Logic regression  (4)      |no test       | 0.77033    | [description](about/README_epoch4.md)|
 |Random Forest     (5)      |0.77990       | no test    | [description](about/README_epoch5.md)|
 | Catboost         (6)      | no model     | 0.77990    | [description](about/README_epoch6.md)|
+| Catboost         (7)      | no model     | 0.78229    | [description](about/README_epoch6.1.md)|

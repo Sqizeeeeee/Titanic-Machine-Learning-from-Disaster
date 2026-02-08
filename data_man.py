@@ -3,7 +3,7 @@ import numpy as np
 from sklearn.impute import KNNImputer
 
 def fill_age_knn(df):
-    # Для KNN берем числовые признаки + категориальные кодируем int временно
+    # Для KNN берем числовые признаки + категориальные кодируем int
     tmp_df = df.copy()
     cat_cols = ['Sex', 'Title', 'Pclass']
     for col in cat_cols:
